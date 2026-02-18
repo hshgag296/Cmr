@@ -2,105 +2,93 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<title>LeKimLam AI - HUD VISION SYSTEM</title>
+<title>LeKimLam SECURITY - SENTRY MODE</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-<!-- Font Cyberpunk -->
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<!-- Font Quân sự -->
+<link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
 <style>
     :root {
-        --primary: #00f3ff; /* Cyan Cyberpunk */
-        --warning: #ff0055; /* Red Alert */
-        --bg-hud: rgba(10, 15, 20, 0.85);
+        --danger: #ff0000;
+        --safe: #00ff00;
+        --bg: #050505;
     }
     
     body { 
-        margin: 0; background: #000; overflow: hidden; 
-        font-family: 'Share Tech Mono', monospace; 
+        margin: 0; background: var(--bg); overflow: hidden; 
+        font-family: 'Roboto Mono', monospace; 
     }
 
-    /* Hiệu ứng lưới quét (Grid Overlay) */
-    #grid-overlay {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: 
-            linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
-        background-size: 50px 50px;
-        pointer-events: none; z-index: 5;
+    /* Màn hình đỏ nhấp nháy khi có trộm */
+    @keyframes alert-pulse {
+        0% { box-shadow: inset 0 0 0 0 red; }
+        50% { box-shadow: inset 0 0 100px 50px rgba(255,0,0,0.8); }
+        100% { box-shadow: inset 0 0 0 0 red; }
     }
+    .alert-active { animation: alert-pulse 0.5s infinite; }
 
-    /* Container chính */
-    #viewport { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+    #viewport { position: relative; width: 100vw; height: 100vh; }
     
     video { 
         position: absolute; width: 100%; height: 100%; 
-        object-fit: cover; filter: contrast(1.1) saturate(1.2); /* Tăng độ tương phản cho giống phim */
+        object-fit: cover; filter: contrast(1.2) brightness(0.8); /* Tối đi một chút để nguy hiểm hơn */
     }
     
-    canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; pointer-events: none; z-index: 10; }
+    canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; }
 
     /* UI Layer */
-    #ui-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; }
+    #ui-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 20; }
 
-    /* Top Bar */
-    .top-hud {
+    .header {
         position: absolute; top: 0; left: 0; width: 100%; padding: 15px;
-        display: flex; justify-content: space-between;
-        background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
-        color: var(--primary); text-shadow: 0 0 5px var(--primary);
+        background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent);
+        display: flex; justify-content: space-between; align-items: center;
     }
-    .system-status { font-size: 14px; display: flex; gap: 20px; }
-    .blink { animation: blinker 1s linear infinite; }
 
-    /* Controls */
+    .status-box {
+        border: 2px solid var(--safe); color: var(--safe);
+        padding: 5px 15px; font-family: 'Black Ops One'; font-size: 24px;
+        background: rgba(0,0,0,0.7); text-transform: uppercase;
+    }
+    
+    .danger-mode .status-box {
+        border-color: var(--danger); color: var(--danger);
+        text-shadow: 0 0 10px red;
+    }
+
+    .log-area {
+        position: absolute; bottom: 100px; left: 10px;
+        color: var(--danger); font-size: 12px;
+        text-shadow: 1px 1px 0 #000;
+    }
+
     .controls {
         position: absolute; bottom: 30px; width: 100%;
         display: flex; justify-content: center; gap: 20px; pointer-events: auto;
     }
 
     button {
-        background: rgba(0, 20, 30, 0.6); border: 1px solid var(--primary);
-        color: var(--primary); padding: 10px 20px; font-family: 'Share Tech Mono';
-        text-transform: uppercase; letter-spacing: 2px; cursor: pointer;
-        backdrop-filter: blur(4px); box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
-        transition: 0.3s; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+        background: #333; color: white; border: 1px solid #555;
+        padding: 15px 30px; font-weight: bold; cursor: pointer;
+        text-transform: uppercase; clip-path: polygon(10% 0, 100% 0, 100% 80%, 90% 100%, 0 100%, 0 20%);
     }
-    button:hover { background: var(--primary); color: #000; box-shadow: 0 0 20px var(--primary); }
+    button.arm-btn { background: var(--danger); border: none; color: black; }
+    button:active { transform: scale(0.95); }
 
-    @keyframes blinker { 50% { opacity: 0; } }
-
-    /* Loading Screen */
-    #loader {
+    #evidence-flash {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: #000; z-index: 100;
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        color: var(--primary);
+        background: white; z-index: 100; opacity: 0; pointer-events: none;
+        transition: opacity 0.1s;
     }
-    .loading-bar {
-        width: 200px; height: 4px; background: #333; margin-top: 20px;
-        position: relative; overflow: hidden;
-    }
-    .loading-bar::after {
-        content: ''; position: absolute; top: 0; left: 0; height: 100%; width: 50%;
-        background: var(--primary); animation: load 1s infinite ease-in-out;
-    }
-    @keyframes load { 0% { left: -50%; } 100% { left: 100%; } }
-
 </style>
 </head>
-<body>
+<body id="body">
 
-<div id="loader">
-    <h1>SYSTEM INITIALIZING...</h1>
-    <div class="loading-bar"></div>
-    <p id="load-text">LOADING NEURAL NETWORK [MOBILENET_V2]...</p>
-</div>
-
-<div id="grid-overlay"></div>
+<div id="evidence-flash"></div>
 
 <div id="viewport">
     <video id="video" autoplay playsinline muted></video>
@@ -108,253 +96,207 @@
 </div>
 
 <div id="ui-layer">
-    <div class="top-hud">
-        <div class="system-status">
-            <span>SYS: <span style="color:#0f0">ONLINE</span></span>
-            <span>CPU: <span id="fps-meter">0</span> FPS</span>
-            <span>TARGETS: <span id="target-count">0</span></span>
-        </div>
-        <div class="blink">● REC</div>
+    <div class="header">
+        <div id="status-display" class="status-box">SYSTEM ARMED</div>
+        <div style="color:white; font-size:12px">REC ●</div>
     </div>
+    
+    <div class="log-area" id="log">Waiting for movement...</div>
 
     <div class="controls">
-        <button onclick="switchCamera()">[CAM_SWITCH]</button>
-        <button onclick="toggleMode()">[MODE: HUD]</button>
+        <button class="arm-btn" onclick="toggleArm()" id="btn-arm">DISARM</button>
+        <button onclick="toggleSound()" id="btn-sound">SOUND: ON</button>
     </div>
 </div>
 
 <script>
 /**
- * LEKIMLAM ARCHITECTURE - HUD CORE
+ * LEKIMLAM SECURITY - SENTRY CORE
  */
 
-// --- 1. ADVANCED DICTIONARY (TỪ ĐIỂN SIÊU CẤP) ---
-const CODENAMES = {
-    'person':       { name: 'BIO-UNIT: HUMAN', type: 'BIO', color: '#00f3ff' },
-    'bicycle':      { name: 'VEHICLE: BICYCLE', type: 'MECH', color: '#ffaa00' },
-    'car':          { name: 'VEHICLE: AUTO-4', type: 'MECH', color: '#ffaa00' },
-    'motorcycle':   { name: 'VEHICLE: MOTO-2', type: 'MECH', color: '#ffaa00' },
-    'airplane':     { name: 'AERIAL: PLANE', type: 'MECH', color: '#ff0055' },
-    'bus':          { name: 'TRANSIT: BUS', type: 'MECH', color: '#ffaa00' },
-    'train':        { name: 'TRANSIT: RAIL', type: 'MECH', color: '#ffaa00' },
-    'truck':        { name: 'HAULER: TRUCK', type: 'MECH', color: '#ffaa00' },
-    'boat':         { name: 'MARINE: VESSEL', type: 'MECH', color: '#00aaff' },
-    'traffic light':{ name: 'SIGNAL: TRAFFIC', type: 'INFRA', color: '#ffff00' },
-    'cat':          { name: 'FAUNA: FELINE', type: 'BIO', color: '#ff00ff' },
-    'dog':          { name: 'FAUNA: CANINE', type: 'BIO', color: '#ff00ff' },
-    'horse':        { name: 'FAUNA: EQUINE', type: 'BIO', color: '#ff00ff' },
-    'backpack':     { name: 'STORAGE: PACK', type: 'OBJ', color: '#00ff00' },
-    'umbrella':     { name: 'SHIELD: RAIN', type: 'OBJ', color: '#00ff00' },
-    'bottle':       { name: 'CONTAINER: FLUID', type: 'OBJ', color: '#00ff00' },
-    'cup':          { name: 'VESSEL: DRINK', type: 'OBJ', color: '#00ff00' },
-    'fork':         { name: 'TOOL: FEEDING', type: 'OBJ', color: '#cccccc' },
-    'knife':        { name: 'WEAPON: BLADE', type: 'WARN', color: '#ff0000' },
-    'spoon':        { name: 'TOOL: SCOOP', type: 'OBJ', color: '#cccccc' },
-    'bowl':         { name: 'VESSEL: BOWL', type: 'OBJ', color: '#cccccc' },
-    'banana':       { name: 'FLORA: FRUIT-Y', type: 'BIO', color: '#ffff00' },
-    'apple':        { name: 'FLORA: FRUIT-R', type: 'BIO', color: '#ff0000' },
-    'sandwich':     { name: 'RATION: BREAD', type: 'BIO', color: '#ffaa00' },
-    'orange':       { name: 'FLORA: CITRUS', type: 'BIO', color: '#ffaa00' },
-    'chair':        { name: 'STRUCT: SEAT', type: 'INFRA', color: '#00aaff' },
-    'couch':        { name: 'STRUCT: SOFA', type: 'INFRA', color: '#00aaff' },
-    'potted plant': { name: 'FLORA: DECOR', type: 'BIO', color: '#00ff00' },
-    'bed':          { name: 'STRUCT: SLEEP', type: 'INFRA', color: '#00aaff' },
-    'tv':           { name: 'DEVICE: DISPLAY', type: 'TECH', color: '#00f3ff' },
-    'laptop':       { name: 'DEVICE: PORTABLE-PC', type: 'TECH', color: '#00f3ff' },
-    'mouse':        { name: 'INPUT: MOUSE', type: 'TECH', color: '#00f3ff' },
-    'remote':       { name: 'CTRL: REMOTE', type: 'TECH', color: '#00f3ff' },
-    'keyboard':     { name: 'INPUT: KEYBOARD', type: 'TECH', color: '#00f3ff' },
-    'cell phone':   { name: 'DEVICE: SMART-COM', type: 'TECH', color: '#00f3ff' },
-    'book':         { name: 'DATA: PHYSICAL', type: 'OBJ', color: '#ffffff' },
-    'clock':        { name: 'CHRONO: METER', type: 'TECH', color: '#ffffff' },
-    'vase':         { name: 'DECOR: CERAMIC', type: 'OBJ', color: '#ffffff' },
-    'scissors':     { name: 'TOOL: CUTTER', type: 'WARN', color: '#ff0055' },
-    'teddy bear':   { name: 'TOY: PLUSH', type: 'OBJ', color: '#ff00ff' },
-    'toothbrush':   { name: 'HYGIENE: BRUSH', type: 'OBJ', color: '#ffffff' }
-};
+// --- 1. SIREN SYSTEM (CÒI HÚ) ---
+// Sử dụng Web Audio API để không cần file mp3
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let oscillator = null;
+let gainNode = null;
+let isSirenPlaying = false;
+let soundEnabled = true;
 
-// Fallback nếu không tìm thấy
-function resolveName(originalClass) {
-    if (CODENAMES[originalClass]) {
-        return CODENAMES[originalClass];
-    }
-    return { 
-        name: `UNKNOWN: ${originalClass.toUpperCase()}`, 
-        type: 'UNK', 
-        color: '#ffffff' 
-    };
+function startSiren() {
+    if (!soundEnabled || isSirenPlaying) return;
+    isSirenPlaying = true;
+
+    oscillator = audioCtx.createOscillator();
+    gainNode = audioCtx.createGain();
+    
+    oscillator.type = 'sawtooth'; // Âm thanh gắt
+    oscillator.frequency.value = 500;
+    
+    // Hiệu ứng lên xuống (Wee-Woo)
+    oscillator.frequency.setValueAtTime(500, audioCtx.currentTime);
+    oscillator.frequency.linearRampToValueAtTime(1000, audioCtx.currentTime + 0.3);
+    oscillator.frequency.linearRampToValueAtTime(500, audioCtx.currentTime + 0.6);
+    
+    // Loop hiệu ứng
+    setInterval(() => {
+        if(oscillator && isSirenPlaying) {
+            const now = audioCtx.currentTime;
+            oscillator.frequency.setValueAtTime(500, now);
+            oscillator.frequency.linearRampToValueAtTime(1000, now + 0.3);
+            oscillator.frequency.linearRampToValueAtTime(500, now + 0.6);
+        }
+    }, 600);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.start();
 }
 
-// --- 2. CORE CONFIG ---
+function stopSiren() {
+    if (oscillator) {
+        oscillator.stop();
+        oscillator.disconnect();
+        oscillator = null;
+    }
+    isSirenPlaying = false;
+}
+
+// --- 2. SECURITY CONFIG ---
 const CONFIG = {
-    SMOOTH: 0.25,
-    IOU_THRESH: 0.35,
-    CONFIDENCE: 0.55, // Tăng lên để lọc nhiễu
-    MISS_LIMIT: 15
+    CONFIDENCE: 0.55,
+    HISTORY_LENGTH: 20, // Độ dài đuôi di chuyển
+    ALARM_COOLDOWN: 100 // Frame
 };
 
 let state = {
     model: null,
-    stream: null,
-    facing: 'environment',
-    tracks: [],
-    lastTime: 0,
-    fps: 0
+    armed: true, // Mặc định bật báo động
+    alarmActive: false,
+    tracks: [], // Lưu trữ vật thể và lịch sử di chuyển
+    lastEvidenceTime: 0
 };
 
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status-display');
+const bodyEl = document.getElementById('body');
+const logEl = document.getElementById('log');
 
-// --- 3. LOGIC (TRACKING & IOU) ---
-function getIoU(box1, box2) {
-    const [x1, y1, w1, h1] = box1;
-    const [x2, y2, w2, h2] = box2;
-    const xi1 = Math.max(x1, x2);
-    const yi1 = Math.max(y1, y2);
-    const xi2 = Math.min(x1 + w1, x2 + w2);
-    const yi2 = Math.min(y1 + h1, y2 + h2);
-    const inter = Math.max(0, xi2 - xi1) * Math.max(0, yi2 - yi1);
-    return inter / ((w1*h1) + (w2*h2) - inter);
-}
-
-function lerp(s, e, t) { return (1-t)*s + t*e; }
+// --- 3. TRACKING & TRAIL LOGIC ---
 
 function updateTracks(preds) {
-    state.tracks.forEach(t => t.seen = false);
+    // Chỉ quan tâm đến NGƯỜI (Person)
+    const persons = preds.filter(p => p.class === 'person' && p.score > CONFIG.CONFIDENCE);
 
-    preds.forEach(p => {
-        if (p.score < CONFIG.CONFIDENCE) return;
-
-        let best = null, maxIoU = 0;
-        state.tracks.forEach(t => {
-            if (t.rawClass === p.class) {
-                const iou = getIoU(t.box, p.bbox);
-                if (iou > maxIoU) { maxIoU = iou; best = t; }
-            }
-        });
-
-        if (best && maxIoU > CONFIG.IOU_THRESH) {
-            best.target = p.bbox;
-            best.score = p.score;
-            best.seen = true;
-            best.miss = 0;
-        } else {
-            const info = resolveName(p.class);
-            state.tracks.push({
-                id: Math.random().toString(16).slice(2, 6).toUpperCase(),
-                rawClass: p.class,
-                displayName: info.name,
-                color: info.color,
-                score: p.score,
-                box: [...p.bbox],
-                target: [...p.bbox],
-                seen: true,
-                miss: 0,
-                // Tạo số liệu giả ngẫu nhiên cho ngầu
-                dist: (Math.random() * 5 + 1).toFixed(1) + 'M',
-                scanLine: 0 
-            });
+    if (persons.length === 0) {
+        // Nếu không thấy ai, reset báo động sau một lúc
+        if (state.alarmActive) {
+            stopSiren();
+            state.alarmActive = false;
+            bodyEl.classList.remove('alert-active');
+            statusEl.innerText = "SYSTEM ARMED";
+            bodyEl.classList.remove('danger-mode');
         }
-    });
-
-    state.tracks = state.tracks.filter(t => {
-        if (!t.seen) t.miss++;
-        return t.miss < CONFIG.MISS_LIMIT;
-    });
-    
-    document.getElementById('target-count').innerText = state.tracks.length;
-}
-
-// --- 4. RENDERER (HUD STYLE) ---
-function drawHUD(track) {
-    // Smooth movement
-    track.box[0] = lerp(track.box[0], track.target[0], CONFIG.SMOOTH);
-    track.box[1] = lerp(track.box[1], track.target[1], CONFIG.SMOOTH);
-    track.box[2] = lerp(track.box[2], track.target[2], CONFIG.SMOOTH);
-    track.box[3] = lerp(track.box[3], track.target[3], CONFIG.SMOOTH);
-
-    const [x, y, w, h] = track.box;
-    const color = track.color;
-    
-    // Fade out if missing
-    ctx.globalAlpha = Math.max(0.2, 1 - (track.miss / CONFIG.MISS_LIMIT));
-    
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.fillStyle = color;
-
-    // 1. Vẽ 4 góc (Corner Brackets) thay vì full box
-    const len = Math.min(w, h) * 0.2; // Độ dài góc
-    
-    // Top-Left
-    ctx.beginPath(); ctx.moveTo(x, y + len); ctx.lineTo(x, y); ctx.lineTo(x + len, y); ctx.stroke();
-    // Top-Right
-    ctx.beginPath(); ctx.moveTo(x + w - len, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + len); ctx.stroke();
-    // Bottom-Right
-    ctx.beginPath(); ctx.moveTo(x + w, y + h - len); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - len, y + h); ctx.stroke();
-    // Bottom-Left
-    ctx.beginPath(); ctx.moveTo(x + len, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - len); ctx.stroke();
-
-    // 2. Scan Line Effect (Chạy lên xuống trong box)
-    track.scanLine += 2;
-    if (track.scanLine > h) track.scanLine = 0;
-    ctx.globalAlpha = 0.3 * ctx.globalAlpha;
-    ctx.fillRect(x, y + track.scanLine, w, 2);
-    ctx.globalAlpha = ctx.globalAlpha / 0.3; // Reset alpha
-
-    // 3. Label & Data Block
-    ctx.font = '12px "Share Tech Mono"';
-    const label = `${track.displayName}`;
-    const metrics = `ID:${track.id} | INTEG:${Math.round(track.score*100)}%`;
-    
-    // Background cho text
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(x, y - 40, Math.max(w, 150), 35);
-    
-    // Text chính
-    ctx.fillStyle = color;
-    ctx.fillText(label, x + 5, y - 25);
-    
-    // Text phụ (nhỏ hơn)
-    ctx.fillStyle = '#ccc';
-    ctx.font = '10px "Share Tech Mono"';
-    ctx.fillText(metrics, x + 5, y - 10);
-
-    // 4. Connecting Line (Đường nối text vào box)
-    ctx.beginPath();
-    ctx.moveTo(x, y - 5);
-    ctx.lineTo(x, y);
-    ctx.stroke();
-
-    // 5. Tọa độ giả lập bên cạnh box
-    if (h > 100) {
-        ctx.fillStyle = color;
-        ctx.fillText(`Y:${Math.round(y)}`, x + w + 5, y + 20);
-        ctx.fillText(`X:${Math.round(x)}`, x + w + 5, y + 35);
-        ctx.fillText(`Z:${track.dist}`, x + w + 5, y + 50);
+        state.tracks = [];
+        return;
     }
 
-    ctx.globalAlpha = 1.0;
+    // Nếu thấy người và đang ARMED -> BÁO ĐỘNG NGAY
+    if (state.armed && !state.alarmActive) {
+        triggerAlarm();
+    }
+
+    // Cập nhật vị trí để vẽ đường đi
+    // Đơn giản hóa: Xóa track cũ, tạo track mới mỗi frame (cho demo mượt)
+    // Trong thực tế cần ID matching, nhưng ở đây ta vẽ đè lên
+    
+    // Logic vẽ đuôi (Trail):
+    // Ta cần lưu vị trí cũ. Vì demo đơn giản, ta sẽ push vị trí vào mảng toàn cục
+    // Nếu có nhiều người, logic này sẽ nối tất cả lại (chấp nhận được cho demo security 1 cam)
+    
+    const person = persons[0]; // Lấy người rõ nhất
+    const centerX = person.bbox[0] + person.bbox[2]/2;
+    const centerY = person.bbox[1] + person.bbox[3]/2;
+
+    state.tracks.push({x: centerX, y: centerY});
+    if (state.tracks.length > CONFIG.HISTORY_LENGTH) state.tracks.shift();
+
+    drawSecurityHUD(person);
 }
 
-function renderLoop() {
+function triggerAlarm() {
+    state.alarmActive = true;
+    statusEl.innerText = "⚠️ INTRUDER DETECTED ⚠️";
+    bodyEl.classList.add('danger-mode');
+    bodyEl.classList.add('alert-active'); // Hiệu ứng đỏ màn hình
+    
+    logEl.innerText = `[${new Date().toLocaleTimeString()}] THREAT DETECTED!`;
+    
+    startSiren();
+    takeEvidencePhoto();
+}
+
+function takeEvidencePhoto() {
+    const now = Date.now();
+    if (now - state.lastEvidenceTime > 3000) { // Chụp mỗi 3 giây
+        state.lastEvidenceTime = now;
+        
+        // Hiệu ứng Flash
+        const flash = document.getElementById('evidence-flash');
+        flash.style.opacity = 1;
+        setTimeout(() => flash.style.opacity = 0, 100);
+
+        // Lưu ảnh (Code giả lập, thực tế sẽ gửi về server)
+        console.log("📸 EVIDENCE CAPTURED");
+    }
+}
+
+// --- 4. RENDERER ---
+function drawSecurityHUD(person) {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    state.tracks.forEach(drawHUD);
+    const [x, y, w, h] = person.bbox;
+    const color = state.alarmActive ? '#ff0000' : '#00ff00';
 
-    // Tính FPS
-    const now = performance.now();
-    const delta = now - state.lastTime;
-    if (delta >= 1000) {
-        state.fps = Math.round((1000/delta) * 60); // Ước lượng
-        document.getElementById('fps-meter').innerText = 60; // WebGL vẽ 60fps
-        state.lastTime = now;
+    // 1. Vẽ đường di chuyển (Motion Trail)
+    if (state.tracks.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.moveTo(state.tracks[0].x, state.tracks[0].y);
+        for (let i = 1; i < state.tracks.length; i++) {
+            ctx.lineTo(state.tracks[i].x, state.tracks[i].y);
+        }
+        ctx.stroke();
+        
+        // Vẽ các điểm chốt
+        state.tracks.forEach(p => {
+            ctx.fillStyle = color;
+            ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+        });
     }
 
-    requestAnimationFrame(renderLoop);
+    // 2. Vẽ khung ngắm mục tiêu (Target Lock)
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x, y, w, h);
+
+    // 3. Đường chéo khóa mục tiêu (Crosshair)
+    ctx.beginPath();
+    ctx.moveTo(x + w/2, y); ctx.lineTo(x + w/2, y + h); // Dọc
+    ctx.moveTo(x, y + h/2); ctx.lineTo(x + w, y + h/2); // Ngang
+    ctx.globalAlpha = 0.3;
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+
+    // 4. Thông tin mục tiêu
+    ctx.fillStyle = color;
+    ctx.font = 'bold 16px "Roboto Mono"';
+    ctx.fillText("TARGET: HUMAN", x, y - 10);
+    ctx.fillText(`CONFIDENCE: ${Math.round(person.score*100)}%`, x, y + h + 20);
 }
 
 async function aiLoop() {
@@ -369,41 +311,62 @@ async function aiLoop() {
 // --- 5. SETUP ---
 async function main() {
     try {
-        // Camera Setup
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+            video: { facingMode: 'environment', width: {ideal: 1280}, height: {ideal: 720} },
             audio: false
         });
         video.srcObject = stream;
         
-        // Load Model (Dùng mobilenet_v2 thay vì lite để chính xác hơn)
-        // Lưu ý: mobilenet_v2 nặng hơn lite một chút nhưng tốt hơn.
         state.model = await cocoSsd.load({ base: 'mobilenet_v2' });
         
-        document.getElementById('loader').style.display = 'none';
-        
+        logEl.innerText = "System Online. Scanning...";
         video.play();
         aiLoop();
-        renderLoop();
 
     } catch (err) {
-        document.getElementById('load-text').innerText = "ERROR: " + err.message;
-        document.getElementById('load-text').style.color = 'red';
+        alert("Cam Error: " + err.message);
     }
 }
 
-function switchCamera() {
-    state.facing = state.facing === 'user' ? 'environment' : 'user';
-    main(); // Restart
+// Controls
+function toggleArm() {
+    state.armed = !state.armed;
+    const btn = document.getElementById('btn-arm');
+    
+    if (state.armed) {
+        statusEl.innerText = "SYSTEM ARMED";
+        statusEl.style.borderColor = "var(--safe)"; // Màu xanh chờ đợi
+        statusEl.style.color = "var(--safe)";
+        btn.innerText = "DISARM";
+        btn.style.background = "var(--danger)";
+        logEl.innerText = "System Armed. Movement will trigger alarm.";
+    } else {
+        statusEl.innerText = "STANDBY";
+        statusEl.style.borderColor = "#555";
+        statusEl.style.color = "#aaa";
+        btn.innerText = "ARM SYSTEM";
+        btn.style.background = "#333";
+        stopSiren();
+        state.alarmActive = false;
+        bodyEl.classList.remove('alert-active');
+        bodyEl.classList.remove('danger-mode');
+        logEl.innerText = "System Disarmed.";
+    }
 }
 
-function toggleMode() {
-    // Chức năng mở rộng trong tương lai
-    alert("MODE: HUD VISION [LOCKED]");
+function toggleSound() {
+    soundEnabled = !soundEnabled;
+    document.getElementById('btn-sound').innerText = soundEnabled ? "SOUND: ON" : "SOUND: OFF";
+    if (!soundEnabled) stopSiren();
 }
+
+// Start interaction required for AudioContext
+document.body.addEventListener('click', () => {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}, {once:true});
 
 main();
 
 </script>
 </body>
-</html>
+</html>4
