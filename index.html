@@ -2,11 +2,10 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<title>Camera AI Phát Hiện Vật Thể + Zoom 10x + Rõ Nét</title>
+<title>Camera AI Phát Hiện Vật Thể Siêu Tối Tân (YOLOv8)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
 <style>
 body {
@@ -32,7 +31,7 @@ video, canvas {
     height: 100%;
     object-fit: cover;
     transition: transform 0.3s ease;
-    image-rendering: crisp-edges; /* Giúp nét hơn khi zoom */
+    image-rendering: crisp-edges;
 }
 
 .controls {
@@ -84,6 +83,316 @@ video, canvas {
 
 button {
     background: rgba(0,0,0,0.7);
+    color: #0f0;
+    border: 1px solid #0f0;
+    border-radius: 30px;
+    padding: 10px 16px;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+#status {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    color: #0f0;
+    background: rgba(0,0,0,0.6);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 10;
+}
+</style>
+</head>
+
+<body>
+
+<div id="container">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+</div>
+
+<div id="status">📷 Đang khởi động camera...</div>
+
+<div class="controls">
+    <button onclick="switchCamera()">🔁 Đổi camera</button>
+    <button onclick="takePhoto()">📸 Chụp ảnh</button>
+    <button onclick="zoomIn()">🔍 +</button>
+    <button onclick="zoomOut()">🔍 -</button>
+</div>
+
+<div class="zoom-controls">
+    <label>Zoom: <span id="zoomValue">1.0x</span></label>
+    <input type="range" id="zoomSlider" class="zoom-slider" min="0.5" max="10" step="0.1" value="1" oninput="updateZoom(this.value)">
+</div>
+
+<script>
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+let status = document.getElementById("status");
+let zoomValueDisplay = document.getElementById("zoomValue");
+let zoomSlider = document.getElementById("zoomSlider");
+
+let currentFacing = "environment";
+let stream = null;
+let model = null;
+
+let zoomLevel = 1;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 10;
+const ZOOM_STEP = 0.5;
+
+let frameCount = 0;
+const detectInterval = 2; // Tăng mượt
+
+const INPUT_SIZE = 640; // YOLOv8 input size
+const CONFIDENCE_THRESHOLD = 0.3; // Filter thấp để detect nhiều, nhưng >0.3 để giảm lỗi
+const IOU_THRESHOLD = 0.45; // NMS threshold
+
+// COCO classes cho YOLOv8 (80 classes)
+const CLASS_NAMES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush"
+];
+
+// Sharpen kernel
+const sharpenKernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+
+async function startCamera() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+
+    try {
+        const constraints = {
+            video: {
+                facingMode: { ideal: currentFacing },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+                frameRate: { ideal: 30 },
+                resizeMode: "crop-and-scale"
+            },
+            audio: false
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        status.innerText = "📹 Camera đã bật - Siêu nét";
+    } catch (err) {
+        status.innerText = "❌ Lỗi camera: " + err.message;
+        const fallback = { video: { facingMode: currentFacing } };
+        stream = await navigator.mediaDevices.getUserMedia(fallback);
+        video.srcObject = stream;
+    }
+}
+
+function switchCamera() {
+    currentFacing = currentFacing === "environment" ? "user" : "environment";
+    startCamera();
+}
+
+function takePhoto() {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    applySharpen();
+    const a = document.createElement("a");
+    a.download = "ai-photo-yolo.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+}
+
+function applyZoom() {
+    const scale = `scale(${zoomLevel})`;
+    video.style.transform = `translate(-50%, -50%) ${scale}`;
+    canvas.style.transform = `translate(-50%, -50%) ${scale}`;
+    zoomValueDisplay.innerText = zoomLevel.toFixed(1) + 'x';
+    zoomSlider.value = zoomLevel;
+}
+
+function zoomIn() {
+    zoomLevel = Math.min(zoomLevel + ZOOM_STEP, MAX_ZOOM);
+    applyZoom();
+    updateStatus();
+}
+
+function zoomOut() {
+    zoomLevel = Math.max(zoomLevel - ZOOM_STEP, MIN_ZOOM);
+    applyZoom();
+    updateStatus();
+}
+
+function updateZoom(value) {
+    zoomLevel = parseFloat(value);
+    applyZoom();
+    updateStatus();
+}
+
+function updateStatus(predictions = []) {
+    const personCount = predictions.filter(p => CLASS_NAMES[p.class] === "person").length;
+    status.innerText = `🔍 Phát hiện ${predictions.length} vật thể (person: ${personCount}) | Zoom: ${zoomLevel.toFixed(1)}x | Res: ${video.videoWidth}x${video.videoHeight}`;
+}
+
+async function loadAI() {
+    status.innerText = "🤖 Đang tải YOLOv8 siêu tối tân...";
+    try {
+        model = await tf.loadGraphModel("./yolov8n_web_model/model.json"); // Chỉnh nếu dùng yolov8s
+        status.innerText = "✅ YOLOv8 sẵn sàng - Detect siêu chính xác!";
+        detect();
+    } catch (err) {
+        status.innerText = "❌ Lỗi tải YOLOv8: " + err.message + " (kiểm tra folder model)";
+    }
+}
+
+// Preprocess input cho YOLOv8
+function preprocess(src) {
+    let [input, xRatio, yRatio] = tf.tidy(() => {
+        const img = tf.browser.fromPixels(src);
+        const [h, w] = img.shape.slice(0, 2);
+        const maxSize = Math.max(h, w);
+        const imgPadded = img.pad([[0, maxSize - h], [0, maxSize - w], [0, 0]]);
+        return [
+            tf.expandDims(tf.div(tf.image.resizeBilinear(imgPadded, [INPUT_SIZE, INPUT_SIZE]), 255.0), 0),
+            w / maxSize,
+            h / maxSize
+        ];
+    });
+    return [input, xRatio, yRatio];
+}
+
+// Postprocess output YOLOv8
+function postprocess(output, xRatio, yRatio) {
+    return tf.tidy(() => {
+        const boxes = [];
+        output = output.transpose([0, 2, 1]); // [1, 8400, 84] -> [1, 84, 8400] nhưng adjust cho YOLOv8
+        output = output.squeeze(); // [84, 8400]
+        const [classProbs, boxesData] = tf.split(output, [80, 4], 0); // Classes và boxes
+        const scores = tf.max(classProbs, 0).dataSync();
+        const classes = tf.argMax(classProbs, 0).dataSync();
+
+        const rawBoxes = boxesData.transpose().dataSync();
+
+        for (let i = 0; i < scores.length; ++i) {
+            if (scores[i] > CONFIDENCE_THRESHOLD) {
+                const [yCenter, xCenter, height, width] = rawBoxes.slice(i * 4, (i + 1) * 4);
+                const top = (yCenter - height / 2) / yRatio;
+                const left = (xCenter - width / 2) / xRatio;
+                const bottom = (yCenter + height / 2) / yRatio;
+                const right = (xCenter + width / 2) / xRatio;
+                boxes.push({
+                    top: Math.max(0, top),
+                    left: Math.max(0, left),
+                    bottom: Math.min(video.videoHeight, bottom),
+                    right: Math.min(video.videoWidth, right),
+                    class: classes[i],
+                    score: scores[i]
+                });
+            }
+        }
+
+        // NMS để giảm trùng lặp
+        const selected = tf.image.nonMaxSuppression(
+            boxes.map(item => [item.top, item.left, item.bottom, item.right]),
+            boxes.map(item => item.score),
+            20, // Max output
+            IOU_THRESHOLD,
+            CONFIDENCE_THRESHOLD
+        ).dataSync();
+
+        return selected.map(index => boxes[index]);
+    });
+}
+
+function applySharpen() {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    const tempData = new Uint8ClampedArray(data);
+
+    for (let y = 1; y < canvas.height - 1; y++) {
+        for (let x = 1; x < canvas.width - 1; x++) {
+            const i = (y * canvas.width + x) * 4;
+            let r = 0, g = 0, b = 0;
+            for (let ky = -1; ky <= 1; ky++) {
+                for (let kx = -1; kx <= 1; kx++) {
+                    const idx = ((y + ky) * canvas.width + (x + kx)) * 4;
+                    const weight = sharpenKernel[(ky + 1) * 3 + (kx + 1)];
+                    r += tempData[idx] * weight;
+                    g += tempData[idx + 1] * weight;
+                    b += tempData[idx + 2] * weight;
+                }
+            }
+            data[i] = Math.min(255, Math.max(0, r));
+            data[i + 1] = Math.min(255, Math.max(0, g));
+            data[i + 2] = Math.min(255, Math.max(0, b));
+        }
+    }
+    ctx.putImageData(imageData, 0, 0);
+}
+
+async function detect() {
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+        requestAnimationFrame(detect);
+        return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    applySharpen(); // Sharpen mỗi frame
+
+    frameCount++;
+    if (frameCount % detectInterval === 0) {
+        tf.tidy(() => {
+            const [input, xRatio, yRatio] = preprocess(video);
+            const res = model.execute(input);
+            const predictions = postprocess(res, xRatio, yRatio);
+
+            predictions.forEach(p => {
+                const x = p.left;
+                const y = p.top;
+                const w = p.right - p.left;
+                const h = p.bottom - p.top;
+                const className = CLASS_NAMES[p.class];
+                const isPerson = className === "person";
+
+                ctx.strokeStyle = isPerson ? "#ff3366" : "#00ff00";
+                ctx.lineWidth = isPerson ? 4 : 2;
+                ctx.strokeRect(x, y, w, h);
+
+                ctx.fillStyle = isPerson ? "#ff3366" : "#00ff00";
+                ctx.font = isPerson ? "18px Arial" : "14px Arial";
+                ctx.fillText(
+                    `${className} (${Math.round(p.score * 100)}%)`,
+                    x,
+                    y > 25 ? y - 8 : y + 18
+                );
+            });
+
+            updateStatus(predictions);
+        });
+    } else {
+        updateStatus();
+    }
+
+    requestAnimationFrame(detect);
+}
+
+(async () => {
+    await startCamera();
+    await loadAI();
+    applyZoom();
+})();
+</script>
+
+</body>
+</html>    background: rgba(0,0,0,0.7);
     color: #0f0;
     border: 1px solid #0f0;
     border-radius: 30px;
