@@ -2,39 +2,303 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<title>LeKimLam - HUMAN TRACKER ONLY</title>
+<title>TARGET: HUMAN ONLY</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-<!-- Font Quân sự -->
-<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;700&display=swap" rel="stylesheet">
+<!-- Font Khoa học viễn tưởng -->
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;900&display=swap" rel="stylesheet">
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
 <style>
     :root {
-        --color-safe: #00ffcc;
-        --color-lock: #ff3300;
-        --bg-glass: rgba(0, 20, 10, 0.7);
+        --color-lock: #ff0033; /* Đỏ Huyết Dụ */
+        --color-scan: #00ffcc; /* Xanh Scan */
+        --bg-dark: #050505;
     }
-
+    
     body { 
-        margin: 0; background: #000; overflow: hidden; 
-        font-family: 'Chakra Petch', sans-serif; 
+        margin: 0; background: var(--bg-dark); overflow: hidden; 
+        font-family: 'Orbitron', sans-serif; 
     }
 
-    /* Kính ngắm Crosshair ở giữa màn hình */
-    #crosshair {
+    /* Tâm ngắm tĩnh ở giữa màn hình */
+    #crosshair-fixed {
         position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-        width: 40px; height: 40px;
-        border: 1px solid rgba(255, 255, 255, 0.3);
-        z-index: 15; pointer-events: none;
+        width: 60px; height: 60px; pointer-events: none; z-index: 20;
     }
-    #crosshair::before, #crosshair::after {
-        content: ''; position: absolute; background: rgba(255, 255, 255, 0.5);
+    #crosshair-fixed::before, #crosshair-fixed::after {
+        content: ''; position: absolute; background: rgba(255, 255, 255, 0.4);
     }
-    #crosshair::before { top: 19px; left: 0; width: 40px; height: 2px; }
-    #crosshair::after { top: 0; left: 19px; width: 2px; height: 40px; }
+    #crosshair-fixed::before { top: 29px; left: 0; width: 60px; height: 2px; }
+    #crosshair-fixed::after { top: 0; left: 29px; width: 2px; height: 60px; }
+
+    /* Video nền */
+    #viewport { position: relative; width: 100vw; height: 100vh; }
+    video { 
+        position: absolute; width: 100%; height: 100%; 
+        object-fit: cover; filter: grayscale(100%) contrast(1.2) brightness(0.9); /* Trắng đen ngầu */
+    }
+    canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; z-index: 10; }
+
+    /* UI Thông số */
+    #hud-layer {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none; z-index: 15;
+        box-shadow: inset 0 0 100px rgba(0,0,0,0.8);
+    }
+
+    .status-bar {
+        position: absolute; top: 20px; right: 20px; text-align: right;
+        color: var(--color-lock); text-shadow: 0 0 5px var(--color-lock);
+    }
+    .status-text { font-size: 24px; font-weight: 900; letter-spacing: 2px; }
+    .sub-text { font-size: 12px; opacity: 0.8; }
+
+    .scan-line {
+        position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+        background: var(--color-lock); opacity: 0.3;
+        animation: scan 3s linear infinite;
+    }
+    @keyframes scan { 0% {top: 0;} 100% {top: 100%;} }
+
+    #loader {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: #000; z-index: 100; display: flex; align-items: center; justify-content: center;
+        color: var(--color-lock); font-size: 20px; letter-spacing: 5px;
+    }
+</style>
+</head>
+<body>
+
+<div id="loader">INITIALIZING TARGET SYSTEM...</div>
+
+<div id="viewport">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="scan-line"></div>
+</div>
+
+<div id="crosshair-fixed"></div>
+
+<div id="hud-layer">
+    <div class="status-bar">
+        <div class="status-text" id="status-text">NO TARGET</div>
+        <div class="sub-text">FILTER: HUMAN ONLY</div>
+        <div class="sub-text">WEAPON: LOCKED</div>
+    </div>
+</div>
+
+<script>
+/**
+ * LEKIMLAM - HUMAN TARGET ONLY
+ */
+
+const CONFIG = {
+    CONFIDENCE: 0.55,  // Độ tin cậy tối thiểu
+    SMOOTH: 0.2,       // Độ trễ mượt mà (càng nhỏ càng mượt nhưng chậm)
+    HEAD_RATIO: 0.15   // Tỉ lệ đầu so với chiều cao cơ thể
+};
+
+let state = {
+    model: null,
+    tracks: [], // Danh sách mục tiêu
+    pulse: 0    // Biến tạo hiệu ứng nhịp thở
+};
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const statusText = document.getElementById('status-text');
+
+// --- 1. LOGIC TÍNH TOÁN (CORE) ---
+
+function getIoU(box1, box2) {
+    const [x1, y1, w1, h1] = box1;
+    const [x2, y2, w2, h2] = box2;
+    const xi1 = Math.max(x1, x2), yi1 = Math.max(y1, y2);
+    const xi2 = Math.min(x1 + w1, x2 + w2), yi2 = Math.min(y1 + h1, y2 + h2);
+    const inter = Math.max(0, xi2 - xi1) * Math.max(0, yi2 - yi1);
+    return inter / ((w1*h1) + (w2*h2) - inter);
+}
+
+function updateTracks(predictions) {
+    // === BỘ LỌC TUYỆT ĐỐI: CHỈ LẤY NGƯỜI ===
+    const humans = predictions.filter(p => p.class === 'person' && p.score > CONFIG.CONFIDENCE);
+
+    // Reset trạng thái
+    state.tracks.forEach(t => t.seen = false);
+
+    humans.forEach(human => {
+        let best = null, maxIoU = 0;
+        
+        // Tìm mục tiêu cũ để cập nhật (tránh nhảy khung)
+        state.tracks.forEach(track => {
+            const iou = getIoU(track.box, human.bbox);
+            if (iou > maxIoU) { maxIoU = iou; best = track; }
+        });
+
+        if (best && maxIoU > 0.4) {
+            best.target = human.bbox;
+            best.score = human.score;
+            best.seen = true;
+            best.miss = 0;
+        } else {
+            // Mục tiêu mới
+            state.tracks.push({
+                id: `TGT-${Math.floor(Math.random()*999)}`,
+                box: [...human.bbox],
+                target: [...human.bbox],
+                score: human.score,
+                seen: true,
+                miss: 0
+            });
+        }
+    });
+
+    // Xóa mục tiêu mất dấu
+    state.tracks = state.tracks.filter(t => {
+        if (!t.seen) t.miss++;
+        return t.miss < 10; // Giữ khung 10 frame sau khi mất dấu
+    });
+
+    // Cập nhật trạng thái HUD
+    if (state.tracks.length > 0) {
+        statusText.innerText = "TARGET ACQUIRED";
+        statusText.style.color = "red";
+        statusText.style.textShadow = "0 0 10px red";
+    } else {
+        statusText.innerText = "SCANNING...";
+        statusText.style.color = "#00ffcc";
+        statusText.style.textShadow = "0 0 5px #00ffcc";
+    }
+}
+
+function lerp(s, e, t) { return (1-t)*s + t*e; }
+
+// --- 2. HỆ THỐNG VẼ (RENDERER) ---
+
+function draw() {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Hiệu ứng nhịp thở cho khung ngắm
+    state.pulse += 0.05;
+    const breathing = Math.sin(state.pulse) * 2; 
+
+    state.tracks.forEach(t => {
+        // Làm mượt chuyển động
+        t.box[0] = lerp(t.box[0], t.target[0], CONFIG.SMOOTH);
+        t.box[1] = lerp(t.box[1], t.target[1], CONFIG.SMOOTH);
+        t.box[2] = lerp(t.box[2], t.target[2], CONFIG.SMOOTH);
+        t.box[3] = lerp(t.box[3], t.target[3], CONFIG.SMOOTH);
+
+        let [x, y, w, h] = t.box;
+        
+        // Mở rộng khung một chút theo nhịp thở
+        x -= breathing; y -= breathing;
+        w += breathing*2; h += breathing*2;
+
+        const color = '#ff0033'; // Đỏ
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.fillStyle = color;
+
+        // 1. Vẽ Khung Tactical (4 góc vuông)
+        const L = w / 5; // Độ dài góc
+        ctx.beginPath();
+        // Top-Left
+        ctx.moveTo(x, y + L); ctx.lineTo(x, y); ctx.lineTo(x + L, y);
+        // Top-Right
+        ctx.moveTo(x + w - L, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + L);
+        // Bottom-Right
+        ctx.moveTo(x + w, y + h - L); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - L, y + h);
+        // Bottom-Left
+        ctx.moveTo(x + L, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - L);
+        ctx.stroke();
+
+        // 2. Head-Shot Target (Vòng tròn quanh đầu)
+        const headX = x + w/2;
+        const headY = y + (h * CONFIG.HEAD_RATIO); 
+        const headRadius = w * 0.15;
+
+        ctx.beginPath();
+        ctx.arc(headX, headY, headRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        
+        // Chấm đỏ giữa đầu
+        ctx.beginPath();
+        ctx.arc(headX, headY, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 3. Center Mass (Vòng tròn giữa ngực)
+        const chestY = y + (h * 0.4);
+        ctx.beginPath();
+        ctx.arc(headX, chestY, 4, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Đường nối Đầu -> Ngực (Aim Assist Line)
+        ctx.beginPath();
+        ctx.moveTo(headX, headY + headRadius);
+        ctx.lineTo(headX, chestY - 4);
+        ctx.globalAlpha = 0.5;
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+
+        // 4. Thông tin Mục Tiêu
+        ctx.font = '12px "Orbitron"';
+        ctx.fillText(`${t.id}`, x + w + 5, y + 20);
+        ctx.fillText(`DIST: ${(500/w).toFixed(1)}m`, x + w + 5, y + 40); // Giả lập khoảng cách
+        
+        // Thanh máu giả (HP Bar)
+        ctx.fillStyle = '#330000';
+        ctx.fillRect(x, y - 15, w, 6);
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y - 15, w * t.score, 6); // HP dựa trên độ tin cậy AI
+    });
+
+    requestAnimationFrame(draw);
+}
+
+// --- 3. KHỞI ĐỘNG ---
+
+async function main() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false
+        });
+        video.srcObject = stream;
+        
+        // Dùng model 'mobilenet_v2' để chính xác hơn lite
+        state.model = await cocoSsd.load({ base: 'mobilenet_v2' });
+        
+        document.getElementById('loader').style.display = 'none';
+        video.play();
+        
+        detectLoop();
+        draw();
+    } catch (e) {
+        alert("Camera Error: " + e.message);
+    }
+}
+
+async function detectLoop() {
+    if(!state.model) return;
+    try {
+        const preds = await state.model.detect(video);
+        updateTracks(preds);
+    } catch(e) {}
+    requestAnimationFrame(detectLoop);
+}
+
+main();
+
+</script>
+</body>
+</html>    #crosshair::after { top: 0; left: 19px; width: 2px; height: 40px; }
 
     #viewport { position: relative; width: 100vw; height: 100vh; }
     
