@@ -2,39 +2,231 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<title>Camera AI Phát Hiện Vật Thể Siêu Tối Tân (YOLOv8)</title>
+<title>Camera AI Phát Hiện Vật Thể - Box Giữ Yên Không Nháy</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
 <style>
-body {
-    margin: 0;
-    background: black;
-    overflow: hidden;
-    font-family: Arial;
+body { margin: 0; background: black; overflow: hidden; font-family: Arial; }
+#container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+video, canvas { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; image-rendering: crisp-edges; }
+.controls { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; z-index: 10; }
+.zoom-controls { position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%); width: 80%; max-width: 300px; z-index: 10; text-align: center; color: #0f0; }
+.zoom-controls label { display: block; margin-bottom: 5px; font-size: 14px; }
+.zoom-slider { width: 100%; -webkit-appearance: none; height: 8px; background: rgba(0,255,0,0.3); border-radius: 5px; outline: none; }
+.zoom-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; background: #0f0; border-radius: 50%; cursor: pointer; border: 2px solid #000; }
+button { background: rgba(0,0,0,0.7); color: #0f0; border: 1px solid #0f0; border-radius: 30px; padding: 10px 16px; font-size: 16px; cursor: pointer; }
+#status { position: fixed; top: 10px; left: 10px; color: #0f0; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px; font-size: 14px; z-index: 10; }
+</style>
+</head>
+
+<body>
+
+<div id="container">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+</div>
+
+<div id="status">📷 Đang khởi động camera...</div>
+
+<div class="controls">
+    <button onclick="switchCamera()">🔁 Đổi camera</button>
+    <button onclick="takePhoto()">📸 Chụp ảnh</button>
+    <button onclick="zoomIn()">🔍 +</button>
+    <button onclick="zoomOut()">🔍 -</button>
+</div>
+
+<div class="zoom-controls">
+    <label>Zoom: <span id="zoomValue">1.0x</span></label>
+    <input type="range" id="zoomSlider" class="zoom-slider" min="0.5" max="10" step="0.1" value="1" oninput="updateZoom(this.value)">
+</div>
+
+<script>
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+let status = document.getElementById("status");
+let zoomValueDisplay = document.getElementById("zoomValue");
+let zoomSlider = document.getElementById("zoomSlider");
+
+let currentFacing = "environment";
+let stream = null;
+let model = null;
+
+let zoomLevel = 1;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 10;
+const ZOOM_STEP = 0.5;
+
+let frameCount = 0;
+const detectInterval = 4; // Tăng để mượt, giảm flickering
+
+// Smoothing: Lưu predictions trước để blend và giữ ổn định
+let prevPredictions = [];
+const SMOOTH_ALPHA = 0.7; // 0.7 = ưu tiên 70% detections mới, 30% cũ (giảm jitter)
+const STABILITY_THRESHOLD = 2; // Chỉ vẽ nếu object xuất hiện >= 2 frame liên tiếp
+
+async function startCamera() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+
+    try {
+        const constraints = {
+            video: {
+                facingMode: { ideal: currentFacing },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+                frameRate: { ideal: 30 }
+            },
+            audio: false
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        status.innerText = "📹 Camera bật - Box ổn định";
+    } catch (err) {
+        status.innerText = "❌ Lỗi camera: " + err.message;
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacing } });
+        video.srcObject = stream;
+    }
 }
 
-#container {
-    position: relative;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
+function switchCamera() {
+    currentFacing = currentFacing === "environment" ? "user" : "environment";
+    startCamera();
 }
 
-video, canvas {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    transition: transform 0.3s ease;
-    image-rendering: crisp-edges;
+function takePhoto() {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const a = document.createElement("a");
+    a.download = "ai-photo-on-dinh.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
 }
 
-.controls {
+function applyZoom() {
+    const scale = `scale(${zoomLevel})`;
+    video.style.transform = `translate(-50%, -50%) ${scale}`;
+    canvas.style.transform = `translate(-50%, -50%) ${scale}`;
+    zoomValueDisplay.innerText = zoomLevel.toFixed(1) + 'x';
+    zoomSlider.value = zoomLevel;
+}
+
+function zoomIn() {
+    zoomLevel = Math.min(zoomLevel + ZOOM_STEP, MAX_ZOOM);
+    applyZoom();
+}
+
+function zoomOut() {
+    zoomLevel = Math.max(zoomLevel - ZOOM_STEP, MIN_ZOOM);
+    applyZoom();
+}
+
+function updateZoom(value) {
+    zoomLevel = parseFloat(value);
+    applyZoom();
+}
+
+function smoothPredictions(newPreds) {
+    const smoothed = [];
+    const map = new Map(); // Key: class + approx bbox center
+
+    newPreds.forEach(p => {
+        const key = `${p.class}-${Math.round(p.bbox[0]/10)}-${Math.round(p.bbox[1]/10)}`;
+        map.set(key, p);
+    });
+
+    prevPredictions.forEach(old => {
+        const key = `${old.class}-${Math.round(old.bbox[0]/10)}-${Math.round(old.bbox[1]/10)}`;
+        if (map.has(key)) {
+            const newP = map.get(key);
+            // Blend bbox
+            const blended = [
+                SMOOTH_ALPHA * newP.bbox[0] + (1 - SMOOTH_ALPHA) * old.bbox[0],
+                SMOOTH_ALPHA * newP.bbox[1] + (1 - SMOOTH_ALPHA) * old.bbox[1],
+                SMOOTH_ALPHA * newP.bbox[2] + (1 - SMOOTH_ALPHA) * old.bbox[2],
+                SMOOTH_ALPHA * newP.bbox[3] + (1 - SMOOTH_ALPHA) * old.bbox[3]
+            ];
+            smoothed.push({ ...newP, bbox: blended, stable: true });
+            map.delete(key);
+        } else {
+            // Giữ old nếu miss detection (giảm tắt bật)
+            smoothed.push({ ...old, stable: old.stable ? old.stable + 1 : 1 });
+        }
+    });
+
+    // Thêm new detections mới
+    map.forEach(p => smoothed.push({ ...p, stable: 1 }));
+
+    // Filter chỉ vẽ nếu stable >= threshold
+    return smoothed.filter(p => p.stable >= STABILITY_THRESHOLD || p.score > 0.6);
+}
+
+async function loadAI() {
+    status.innerText = "🤖 Đang tải AI...";
+    try {
+        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        status.innerText = "✅ AI sẵn sàng - Box giữ yên, không nháy!";
+        detect();
+    } catch (err) {
+        status.innerText = "❌ Lỗi AI: " + err.message;
+    }
+}
+
+async function detect() {
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+        requestAnimationFrame(detect);
+        return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    frameCount++;
+    if (frameCount % detectInterval === 0) {
+        const predictions = await model.detect(video);
+        const filtered = predictions.filter(p => p.score > 0.4);
+
+        prevPredictions = smoothPredictions(filtered);
+
+        prevPredictions.forEach(p => {
+            const [x, y, w, h] = p.bbox;
+            const isPerson = p.class === "person";
+
+            ctx.strokeStyle = isPerson ? "#ff3366" : "#00ff00";
+            ctx.lineWidth = isPerson ? 4 : 2;
+            ctx.strokeRect(x, y, w, h);
+
+            ctx.fillStyle = isPerson ? "#ff3366" : "#00ff00";
+            ctx.font = isPerson ? "18px Arial" : "14px Arial";
+            ctx.fillText(
+                `${p.class} (${Math.round(p.score * 100)}%)`,
+                x,
+                y > 25 ? y - 8 : y + 18
+            );
+        });
+
+        const personCount = prevPredictions.filter(p => p.class === "person").length;
+        status.innerText = `🔍 Phát hiện ${prevPredictions.length} vật thể ổn định (person: ${personCount}) | Zoom: ${zoomLevel.toFixed(1)}x`;
+    }
+
+    requestAnimationFrame(detect);
+}
+
+(async () => {
+    await startCamera();
+    await loadAI();
+    applyZoom();
+})();
+</script>
+
+</body>
+</html>.controls {
     position: fixed;
     bottom: 80px;
     left: 50%;
